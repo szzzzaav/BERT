@@ -1,23 +1,77 @@
 import os
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-
 import torch
-from datasets import load_dataset
+import pandas as pd
+import requests
+import csv
 from transformers import BertTokenizer, BertForSequenceClassification
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 from tqdm import tqdm
 
 
+def load_ag_news_data(train_samples=1000, test_samples=250):  # 减少样本数量
+    """
+    加载AG News数据集的部分数据
+    train_samples: 训练集样本数量
+    test_samples: 测试集样本数量
+    """
+    train_path = "ag_news_train.csv"
+    test_path = "ag_news_test.csv"
 
-# 1. 数据加载与预处理
-print("加载数据集...")
-dataset = load_dataset('ag_news')
+    # 下载文件（如果不存在）
+    if not os.path.exists(train_path) or not os.path.exists(test_path):
+        print("下载数据集...")
+        train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
+        test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
+
+        for url, path in [(train_url, train_path), (test_url, test_path)]:
+            if not os.path.exists(path):
+                response = requests.get(url)
+                with open(path, 'wb') as f:
+                    f.write(response.content)
+
+    train_data = []
+    test_data = []
+
+    # 读取部分训练数据
+    with open(train_path, 'r', encoding='utf-8') as f:
+        csv_reader = csv.reader(f)
+        for i, row in enumerate(csv_reader):
+            if i >= train_samples:  # 只读取指定数量的样本
+                break
+            train_data.append({
+                'label': int(row[0]) - 1,
+                'text': row[1] + ' ' + row[2]
+            })
+
+    # 读取部分测试数据
+    with open(test_path, 'r', encoding='utf-8') as f:
+        csv_reader = csv.reader(f)
+        for i, row in enumerate(csv_reader):
+            if i >= test_samples:  # 只读取指定数量的样本
+                break
+            test_data.append({
+                'label': int(row[0]) - 1,
+                'text': row[1] + ' ' + row[2]
+            })
+
+    return {
+        'train': pd.DataFrame(train_data),
+        'test': pd.DataFrame(test_data)
+    }
+
+
+learning_rate = 2e-5
+batch_size = 16  # 减小batch size
+max_length = 128
+epochs = 5  # 减少训练轮数
 
 # 初始化tokenizer和模型
+print("初始化模型...")
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 model = BertForSequenceClassification.from_pretrained(
     'bert-base-uncased',
@@ -28,14 +82,7 @@ model = BertForSequenceClassification.from_pretrained(
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
-# 训练参数
-learning_rate = 2e-5
-batch_size = 32
-max_length = 128
-epochs = 30
 
-
-# 自定义数据集类
 class NewsDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_length):
         self.encodings = tokenizer(texts,
@@ -52,42 +99,6 @@ class NewsDataset(Dataset):
 
     def __len__(self):
         return len(self.labels)
-
-
-# 准备数据
-print("准备数据集...")
-train_texts = dataset['train']['text']
-train_labels = dataset['train']['label']
-test_texts = dataset['test']['text']
-test_labels = dataset['test']['label']
-
-# 创建数据集实例
-train_dataset = NewsDataset(train_texts, train_labels, tokenizer, max_length)
-test_dataset = NewsDataset(test_texts, test_labels, tokenizer, max_length)
-
-# 创建数据加载器
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
-
-# 2. 数据分析
-print("进行数据分析...")
-
-
-def analyze_data():
-    # 文本长度分布
-    text_lengths = [len(text.split()) for text in dataset['train']['text']]
-    plt.figure(figsize=(10, 6))
-    plt.hist(text_lengths, bins=50)
-    plt.title('Text Length Distribution')
-    plt.xlabel('Number of Words')
-    plt.ylabel('Count')
-    plt.savefig('text_length_distribution.png')
-    plt.close()
-
-
-# 3. 训练模型
-print("开始训练模型...")
-optimizer = AdamW(model.parameters(), lr=learning_rate)
 
 
 def train_epoch():
@@ -113,7 +124,6 @@ def train_epoch():
     return total_loss / len(train_dataloader)
 
 
-# 4. 评估模型
 def evaluate():
     model.eval()
     predictions = []
@@ -131,70 +141,50 @@ def evaluate():
             predictions.extend(preds.cpu().numpy())
             true_labels.extend(labels.cpu().numpy())
 
-    # 打印分类报告
     print("\n分类报告:")
     print(classification_report(true_labels, predictions,
                                 target_names=['World', 'Sports', 'Business', 'Technology']))
 
-    # 绘制混淆矩阵
-    cm = confusion_matrix(true_labels, predictions)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d',
-                xticklabels=['World', 'Sports', 'Business', 'Technology'],
-                yticklabels=['World', 'Sports', 'Business', 'Technology'])
-    plt.title('Confusion Matrix')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    plt.savefig('confusion_matrix.png')
-    plt.close()
-
     return predictions, true_labels
 
 
-# 5. 错误分析
-def analyze_errors(texts, true_labels, predicted_labels):
-    categories = ['World', 'Sports', 'Business', 'Technology']
-    errors = []
-
-    for text, true_label, pred_label in zip(texts, true_labels, predicted_labels):
-        if true_label != pred_label:
-            errors.append({
-                'text': text,
-                'true_label': categories[true_label],
-                'predicted_label': categories[pred_label]
-            })
-
-    print("\n错误分析示例:")
-    for error in errors[:4]:  # 展示前4个错误示例
-        print(f"\n文本: {error['text'][:100]}...")
-        print(f"真实标签: {error['true_label']}")
-        print(f"预测标签: {error['predicted_label']}")
-
-
-# 主执行流程
 def main():
+    global train_dataloader, test_dataloader, optimizer
+
     print(f"使用设备: {device}")
 
-    # 数据分析
-    analyze_data()
+    # 加载减少规模后的数据集
+    print("加载数据集...")
+    dataset = load_ag_news_data(train_samples=1000, test_samples=250)
+
+    # 准备数据
+    print("准备数据集...")
+    train_texts = dataset['train']['text'].tolist()
+    train_labels = dataset['train']['label'].tolist()
+    test_texts = dataset['test']['text'].tolist()
+    test_labels = dataset['test']['label'].tolist()
+
+    # 创建数据集实例
+    train_dataset = NewsDataset(train_texts, train_labels, tokenizer, max_length)
+    test_dataset = NewsDataset(test_texts, test_labels, tokenizer, max_length)
+
+    # 创建数据加载器
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
+
+    # 优化器
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
 
     # 训练循环
-    best_loss = float('inf')
+    print("\n开始训练...")
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}/{epochs}")
         avg_loss = train_epoch()
         print(f"Average loss: {avg_loss:.4f}")
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(model.state_dict(), 'best_model.pt')
-
-    # 加载最佳模型进行评估
-    model.load_state_dict(torch.load('best_model.pt'))
-    predictions, true_labels = evaluate()
-
-    # 错误分析
-    analyze_errors(test_texts, true_labels, predictions)
+        # 每个epoch后评估
+        print("\n评估当前epoch:")
+        evaluate()
 
 
 if __name__ == "__main__":
