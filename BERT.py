@@ -7,22 +7,14 @@ from transformers import BertTokenizer, BertForSequenceClassification
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from sklearn.metrics import classification_report, confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
+
 from tqdm import tqdm
 
 
 def load_ag_news_data(train_samples=1000, test_samples=250):  # 减少样本数量
-    """
-    加载AG News数据集的部分数据
-    train_samples: 训练集样本数量
-    test_samples: 测试集样本数量
-    """
     train_path = "ag_news_train.csv"
     test_path = "ag_news_test.csv"
 
-    # 下载文件（如果不存在）
     if not os.path.exists(train_path) or not os.path.exists(test_path):
         print("下载数据集...")
         train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
@@ -37,18 +29,16 @@ def load_ag_news_data(train_samples=1000, test_samples=250):  # 减少样本数�
     train_data = []
     test_data = []
 
-    # 读取部分训练数据
     with open(train_path, 'r', encoding='utf-8') as f:
         csv_reader = csv.reader(f)
         for i, row in enumerate(csv_reader):
-            if i >= train_samples:  # 只读取指定数量的样本
+            if i >= train_samples:
                 break
             train_data.append({
                 'label': int(row[0]) - 1,
                 'text': row[1] + ' ' + row[2]
             })
 
-    # 读取部分测试数据
     with open(test_path, 'r', encoding='utf-8') as f:
         csv_reader = csv.reader(f)
         for i, row in enumerate(csv_reader):
@@ -66,9 +56,9 @@ def load_ag_news_data(train_samples=1000, test_samples=250):  # 减少样本数�
 
 
 learning_rate = 2e-5
-batch_size = 16  # 减小batch size
+batch_size = 16
 max_length = 128
-epochs = 5  # 减少训练轮数
+epochs = 5
 
 # 初始化tokenizer和模型
 print("初始化模型...")
@@ -153,29 +143,23 @@ def main():
 
     print(f"使用设备: {device}")
 
-    # 加载减少规模后的数据集
     print("加载数据集...")
     dataset = load_ag_news_data(train_samples=1000, test_samples=250)
 
-    # 准备数据
     print("准备数据集...")
     train_texts = dataset['train']['text'].tolist()
     train_labels = dataset['train']['label'].tolist()
     test_texts = dataset['test']['text'].tolist()
     test_labels = dataset['test']['label'].tolist()
 
-    # 创建数据集实例
     train_dataset = NewsDataset(train_texts, train_labels, tokenizer, max_length)
     test_dataset = NewsDataset(test_texts, test_labels, tokenizer, max_length)
 
-    # 创建数据加载器
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
-    # 优化器
     optimizer = AdamW(model.parameters(), lr=learning_rate)
 
-    # 训练循环
     print("\n开始训练...")
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}/{epochs}")
